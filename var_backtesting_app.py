@@ -288,7 +288,7 @@ def christoffersen_tuff_test(N_00, N_01, N_10, N_11, N, T, p):
     
     return LR_TUFF, p_value
 
-def run_backtests(df, confidence_level):
+def run_backtests(df, confidence_level, alpha_level):
     """Performs both Kupiec and Christoffersen backtests."""
     
     if df.empty:
@@ -339,21 +339,23 @@ def run_backtests(df, confidence_level):
         'Test': 'Kupiec POF (Unconditional Coverage)',
         'LR Statistic': round(lr_pof, 4),
         'P-Value': round(p_pof, 4),
-        'Result': 'PASS (Accept Null Hypothesis: Expected breaches are met)' if p_pof >= 0.05 else 'FAIL (Reject Null Hypothesis: Too many/few breaches)'
+        # Use the dynamic alpha_level for the PASS/FAIL condition
+        'Result': 'PASS (Accept Null Hypothesis: Expected breaches are met)' if p_pof >= alpha_level else 'FAIL (Reject Null Hypothesis: Too many/few breaches)'
     }
 
     tuff_result = {
         'Test': 'Christoffersen TUFF (Independence)',
         'LR Statistic': round(lr_tuff, 4),
         'P-Value': round(p_tuff, 4),
-        'Result': 'PASS (Accept Null Hypothesis: Breaches are independent)' if p_tuff >= 0.05 else 'FAIL (Reject Null Hypothesis: Breaches are clustered)'
+        # Use the dynamic alpha_level for the PASS/FAIL condition
+        'Result': 'PASS (Accept Null Hypothesis: Breaches are independent)' if p_tuff >= alpha_level else 'FAIL (Reject Null Hypothesis: Breaches are clustered)'
     }
     
     return results, pd.DataFrame([pof_result, tuff_result]), breaches, losses, df[var_col]
 
 # --- Streamlit UI ---
 
-def display_results(results_summary, test_df, breaches, losses, var_series, df_raw):
+def display_results(results_summary, test_df, breaches, losses, var_series, df_raw, alpha_level):
     """Displays backtesting results and plots."""
     
     st.markdown("### Backtesting Results")
@@ -369,14 +371,17 @@ def display_results(results_summary, test_df, breaches, losses, var_series, df_r
     st.divider()
 
     # 2. Test Results Table
-    st.markdown("#### Regulatory Tests ($\alpha=0.05$)")
+    # Use the dynamic alpha_level in the header
+    st.markdown(f"#### Regulatory Tests ($\\alpha={alpha_level}$)")
     st.dataframe(test_df, use_container_width=True, hide_index=True)
+    
+    confidence_pct = int((1 - alpha_level) * 100)
 
     # Conditional Warning/Pass Message
     if 'FAIL' in test_df['Result'].values:
-        st.error("⚠️ REGULATORY FAILURE: At least one test failed the 95% confidence level. Review the VaR model.")
+        st.error(f"⚠️ REGULATORY FAILURE: At least one test failed the {confidence_pct}% confidence level. Review the VaR model.")
     else:
-        st.success("✅ REGULATORY PASS: Both Kupiec POF and Christoffersen TUFF tests passed.")
+        st.success(f"✅ REGULATORY PASS: Both Kupiec POF and Christoffersen TUFF tests passed at the {confidence_pct}% confidence level.")
 
     st.divider()
 
@@ -394,7 +399,6 @@ def display_results(results_summary, test_df, breaches, losses, var_series, df_r
     
     st.line_chart(plot_df[['Daily Loss', 'VaR Limit']], use_container_width=True)
     
-    # Scatter plot for breaches
     st.scatter_chart(plot_df[['Breach']], color='#ff4b4b', use_container_width=True)
     st.caption("Red dots indicate days where the daily loss breached the VaR limit.")
 
@@ -450,7 +454,7 @@ def run_app():
             index=0
         )
         
-        # Select Confidence Level
+        # Select Confidence Level (for VaR calculation)
         confidence_level = st.radio(
             "VaR Confidence Level:",
             options=[99, 95],
@@ -459,6 +463,15 @@ def run_app():
         )
 
         st.caption(f"Testing {confidence_level}% VaR: Expected Failure Rate (p) is {100-confidence_level}%.")
+
+        # Select Alpha (Significance) Level (for regulatory tests)
+        alpha_level = st.selectbox(
+            "Regulatory Significance Level (Alpha, α):",
+            options=[0.05, 0.01],
+            index=0, # Default to 0.05 (standard)
+            format_func=lambda x: f"α = {x} ({int((1-x)*100)}% Confidence)"
+        )
+        st.caption(f"The tests will use a P-Value cutoff of {alpha_level}.")
 
     # --- Main Dashboard ---
     
@@ -478,10 +491,10 @@ def run_app():
         return
 
     # 2. Run Backtests
-    results_summary, test_results_df, breaches, losses, var_series = run_backtests(df_raw, confidence_level)
+    results_summary, test_results_df, breaches, losses, var_series = run_backtests(df_raw, confidence_level, alpha_level)
 
     # 3. Display Results
-    display_results(results_summary, test_results_df, breaches, losses, var_series, df_raw)
+    display_results(results_summary, test_results_df, breaches, losses, var_series, df_raw, alpha_level)
 
 if __name__ == "__main__":
     # Ensure logs are visible for debugging
