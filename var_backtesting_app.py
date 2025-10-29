@@ -56,9 +56,12 @@ def setup_database():
     st.info("Creating database schema...")
     try:
         with conn.cursor() as cur:
+            # CRITICAL FIX: Drop the table first to ensure a clean definition
+            cur.execute("DROP TABLE IF EXISTS var_data CASCADE;")
+            
             # SQL to create the table
             sql_schema = """
-            CREATE TABLE IF NOT EXISTS var_data (
+            CREATE TABLE var_data (
                 date DATE NOT NULL,
                 index_name VARCHAR(50) NOT NULL,
                 pnl FLOAT NOT NULL,
