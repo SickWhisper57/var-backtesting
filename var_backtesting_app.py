@@ -17,6 +17,46 @@ def get_db_secrets():
         return None
     return st.secrets['postgres']
 
+# --- Custom CSS Injection ---
+
+def inject_custom_css():
+    """Injects custom CSS to style metrics, buttons, and other elements."""
+    st.markdown("""
+        <style>
+            /* --- Metric Cards --- */
+            div[data-testid="stMetric"] {
+                background-color: #FAFAFA; /* Light gray background */
+                border: 1px solid #E0E0E0; /* Light border */
+                border-radius: 10px; /* Rounded corners */
+                padding: 15px 20px 15px 20px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05); /* Subtle shadow */
+            }
+            
+            /* Dark mode compatibility for Metric Cards */
+            [data-theme="dark"] div[data-testid="stMetric"] {
+                background-color: #262730; /* Dark background */
+                border: 1px solid #444; 
+            }
+
+            /* --- Success/Error Banners --- */
+            div[data-testid="stSuccess"] {
+                border-radius: 10px;
+                border: 1px solid rgba(40, 167, 69, 0.5);
+                background-color: rgba(40, 167, 69, 0.1);
+            }
+            div[data-testid="stError"] {
+                border-radius: 10px;
+                border: 1px solid rgba(220, 53, 69, 0.5);
+                background-color: rgba(220, 53, 69, 0.1);
+            }
+
+            /* --- Sidebar Utilities --- */
+            .stButton > button {
+                width: 100%; /* Make sidebar buttons full-width */
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
 # --- Database Connection and Utility Functions ---
 
 def get_db_connection():
@@ -166,6 +206,7 @@ def populate_database():
         if conn:
             conn.close()
 
+@st.cache_data(ttl=600) # Cache data for 10 minutes
 def load_data(index_name):
     """Loads all data for a specific index from the database."""
     conn = get_db_connection()
@@ -191,6 +232,7 @@ def load_data(index_name):
         if conn:
             conn.close()
 
+@st.cache_data(ttl=600) # Cache data for 10 minutes
 def get_available_indices():
     """Fetches unique index names from the database."""
     conn = get_db_connection()
@@ -211,6 +253,72 @@ def get_available_indices():
             conn.close()
 
 # --- VaR Backtesting Logic ---
+
+@st.cache_data # Cache the results of this expensive computation
+def run_backtests(df, confidence_level, alpha_level):
+    """Performs both Kupiec and Christoffersen backtests."""
+    
+    if df.empty:
+        return None, None, 0, 0, 0
+
+    # 1. Identify Breaches (Failures)
+    var_col = f'var_{confidence_level}'
+    
+    # Breach occurs if PnL (loss) is greater than VaR (positive value)
+    # PnL is negative for a loss, VaR is positive for the expected loss magnitude
+    # We must convert PnL to a positive loss value for the comparison
+    losses = -df['pnl']
+    breaches = (losses > df[var_col]).astype(int)
+    
+    T = len(df)
+    N = breaches.sum() # Total breaches (N_1)
+    p = 1 - (confidence_level / 100) # Expected failure rate (e.g., 0.01 for 99%)
+    
+    # --- Kupiec POF Test (Unconditional Coverage) ---
+    lr_pof, p_pof = kupiec_pof_test(N, T, p)
+    
+    # --- Christoffersen TUFF Test (Independence) ---
+    
+    # State transition counting: 
+    # Current day breach (t=1) or no breach (t=0)
+    # Previous day breach (t-1=1) or no breach (t-1=0)
+    
+    breaches_prev = breaches.shift(1).fillna(0).astype(int)
+    
+    # N_ij = (previous state i) AND (current state j)
+    N_00 = ((breaches_prev == 0) & (breaches == 0)).sum() # No breach -> No breach
+    N_01 = ((breaches_prev == 0) & (breaches == 1)).sum() # No breach -> Breach
+    N_10 = ((breaches_prev == 1) & (breaches == 0)).sum() # Breach -> No breach
+    N_11 = ((breaches_prev == 1) & (breaches == 1)).sum() # Breach -> Breach
+    
+    lr_tuff, p_tuff = christoffersen_tuff_test(N_00, N_01, N_10, N_11, N, T, p)
+
+    # Compile Results
+    results = {
+        'Total Observations (T)': T,
+        'Total Breaches (N)': N,
+        'Expected Breaches (T*p)': round(T * p, 2),
+        'Observed %': f"{round(N / T * 100, 2)}%",
+        'Expected %': f"{round(p * 100, 2)}%"
+    }
+    
+    pof_result = {
+        'Test': 'Kupiec POF (Unconditional Coverage)',
+        'LR Statistic': round(lr_pof, 4),
+        'P-Value': round(p_pof, 4),
+        # Use the dynamic alpha_level for the PASS/FAIL condition
+        'Result': 'PASS (Accept Null Hypothesis: Expected breaches are met)' if p_pof >= alpha_level else 'FAIL (Reject Null Hypothesis: Too many/few breaches)'
+    }
+
+    tuff_result = {
+        'Test': 'Christoffersen TUFF (Independence)',
+        'LR Statistic': round(lr_tuff, 4),
+        'P-Value': round(p_tuff, 4),
+        # Use the dynamic alpha_level for the PASS/FAIL condition
+        'Result': 'PASS (Accept Null Hypothesis: Breaches are independent)' if p_tuff >= alpha_level else 'FAIL (Reject Null Hypothesis: Breaches are clustered)'
+    }
+    
+    return results, pd.DataFrame([pof_result, tuff_result]), breaches, losses, df[var_col]
 
 def kupiec_pof_test(N, T, p):
     """
@@ -288,147 +396,27 @@ def christoffersen_tuff_test(N_00, N_01, N_10, N_11, N, T, p):
     
     return LR_TUFF, p_value
 
-def run_backtests(df, confidence_level, alpha_level):
-    """Performs both Kupiec and Christoffersen backtests."""
-    
-    if df.empty:
-        return None, None, 0, 0, 0
-
-    # 1. Identify Breaches (Failures)
-    var_col = f'var_{confidence_level}'
-    
-    # Breach occurs if PnL (loss) is greater than VaR (positive value)
-    # PnL is negative for a loss, VaR is positive for the expected loss magnitude
-    # We must convert PnL to a positive loss value for the comparison
-    losses = -df['pnl']
-    breaches = (losses > df[var_col]).astype(int)
-    
-    T = len(df)
-    N = breaches.sum() # Total breaches (N_1)
-    p = 1 - (confidence_level / 100) # Expected failure rate (e.g., 0.01 for 99%)
-    
-    # --- Kupiec POF Test (Unconditional Coverage) ---
-    lr_pof, p_pof = kupiec_pof_test(N, T, p)
-    
-    # --- Christoffersen TUFF Test (Independence) ---
-    
-    # State transition counting: 
-    # Current day breach (t=1) or no breach (t=0)
-    # Previous day breach (t-1=1) or no breach (t-1=0)
-    
-    breaches_prev = breaches.shift(1).fillna(0).astype(int)
-    
-    # N_ij = (previous state i) AND (current state j)
-    N_00 = ((breaches_prev == 0) & (breaches == 0)).sum() # No breach -> No breach
-    N_01 = ((breaches_prev == 0) & (breaches == 1)).sum() # No breach -> Breach
-    N_10 = ((breaches_prev == 1) & (breaches == 0)).sum() # Breach -> No breach
-    N_11 = ((breaches_prev == 1) & (breaches == 1)).sum() # Breach -> Breach
-    
-    lr_tuff, p_tuff = christoffersen_tuff_test(N_00, N_01, N_10, N_11, N, T, p)
-
-    # Compile Results
-    results = {
-        'Total Observations (T)': T,
-        'Total Breaches (N)': N,
-        'Expected Breaches (T*p)': round(T * p, 2),
-        'Observed %': f"{round(N / T * 100, 2)}%",
-        'Expected %': f"{round(p * 100, 2)}%"
-    }
-    
-    pof_result = {
-        'Test': 'Kupiec POF (Unconditional Coverage)',
-        'LR Statistic': round(lr_pof, 4),
-        'P-Value': round(p_pof, 4),
-        # Use the dynamic alpha_level for the PASS/FAIL condition
-        'Result': 'PASS (Accept Null Hypothesis: Expected breaches are met)' if p_pof >= alpha_level else 'FAIL (Reject Null Hypothesis: Too many/few breaches)'
-    }
-
-    tuff_result = {
-        'Test': 'Christoffersen TUFF (Independence)',
-        'LR Statistic': round(lr_tuff, 4),
-        'P-Value': round(p_tuff, 4),
-        # Use the dynamic alpha_level for the PASS/FAIL condition
-        'Result': 'PASS (Accept Null Hypothesis: Breaches are independent)' if p_tuff >= alpha_level else 'FAIL (Reject Null Hypothesis: Breaches are clustered)'
-    }
-    
-    return results, pd.DataFrame([pof_result, tuff_result]), breaches, losses, df[var_col]
-
 # --- Streamlit UI ---
-
-def display_results(results_summary, test_df, breaches, losses, var_series, df_raw, alpha_level):
-    """Displays backtesting results and plots."""
-    
-    st.markdown("### Backtesting Results")
-    
-    # 1. Summary Metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Observations (T)", results_summary['Total Observations (T)'])
-    col2.metric("Total Breaches (N)", results_summary['Total Breaches (N)'])
-    col3.metric("Expected Breaches (T*p)", results_summary['Expected Breaches (T*p)'])
-    col4.metric("Observed Breach Rate", results_summary['Observed %'])
-    col5.metric("Expected Breach Rate", results_summary['Expected %'])
-
-    st.divider()
-
-    # 2. Test Results Table
-    # Use the dynamic alpha_level in the header
-    st.markdown(f"#### Regulatory Tests ($\\alpha={alpha_level}$)")
-    st.dataframe(test_df, use_container_width=True, hide_index=True)
-    
-    confidence_pct = int((1 - alpha_level) * 100)
-
-    # Conditional Warning/Pass Message
-    if 'FAIL' in test_df['Result'].values:
-        st.error(f"⚠️ REGULATORY FAILURE: At least one test failed the {confidence_pct}% confidence level. Review the VaR model.")
-    else:
-        st.success(f"✅ REGULATORY PASS: Both Kupiec POF and Christoffersen TUFF tests passed at the {confidence_pct}% confidence level.")
-
-    st.divider()
-
-    # 3. Plotting VaR and Losses
-    st.markdown("#### VaR vs. Daily Loss Plot")
-    
-    plot_df = pd.DataFrame({
-        'Date': df_raw['date'],
-        'Daily Loss': losses, # Use positive value for plotting loss
-        'VaR Limit': var_series 
-    }).set_index('Date')
-    
-    # Add a column to identify breaches for visualization
-    plot_df['Breach'] = np.where(breaches == 1, losses, np.nan)
-    
-    st.line_chart(plot_df[['Daily Loss', 'VaR Limit']], use_container_width=True)
-    
-    st.scatter_chart(plot_df[['Breach']], color='#ff4b4b', use_container_width=True)
-    st.caption("Red dots indicate days where the daily loss breached the VaR limit.")
-
-    # 4. CSV Export
-    @st.cache_data
-    def convert_df(df):
-        return df.to_csv(index=False).encode('utf-8')
-
-    csv = convert_df(df_raw)
-
-    st.download_button(
-        label="Download Full Backtesting Data (CSV)",
-        data=csv,
-        file_name='VaR_Backtest_Data.csv',
-        mime='text/csv',
-    )
-
 
 def run_app():
     """Main Streamlit application function."""
-    st.set_page_config(layout="wide", page_title="Global VaR Backtesting Platform")
+    st.set_page_config(
+        layout="wide", 
+        page_title="VaR Backtesting Platform",
+        page_icon="📈"
+    )
+    
+    # Inject our custom CSS
+    inject_custom_css()
 
     # --- Sidebar for Setup and Selection ---
     
     with st.sidebar:
-        st.title("VaR Backtesting Controls")
+        st.title("🎛️ VaR Backtesting Controls")
         
         # Database Setup Section
         st.markdown("---")
-        st.header("Database Utilities")
+        st.header("🛠️ Database Utilities")
         
         # Button 1: Setup Schema
         if st.button("1. Setup Database Schema"):
@@ -439,7 +427,7 @@ def run_app():
             populate_database()
 
         st.markdown("---")
-        st.header("Backtesting Parameters")
+        st.header("📊 Backtesting Parameters")
 
         available_indices = get_available_indices()
         
@@ -475,7 +463,7 @@ def run_app():
 
     # --- Main Dashboard ---
     
-    st.title(f"VaR Backtesting Dashboard: {selected_index} ({confidence_level}% VaR)")
+    st.title(f"📈 VaR Backtesting Dashboard: {selected_index} ({confidence_level}% VaR)")
     st.markdown("""
         **Objective:** Validate the 2-year Value-at-Risk (VaR) model by comparing the number and clustering of actual losses (breaches) against expected values.
     """)
@@ -493,10 +481,80 @@ def run_app():
     # 2. Run Backtests
     results_summary, test_results_df, breaches, losses, var_series = run_backtests(df_raw, confidence_level, alpha_level)
 
-    # 3. Display Results
-    display_results(results_summary, test_results_df, breaches, losses, var_series, df_raw, alpha_level)
+    # 3. Create Tabs for Display
+    tab_plot, tab_tests, tab_data = st.tabs([
+        "📈 PnL vs. VaR Plot", 
+        "🔬 Regulatory Tests", 
+        "📄 Raw Data & Export"
+    ])
+
+    # --- Tab 1: PnL vs. VaR Plot ---
+    with tab_plot:
+        st.markdown("#### VaR vs. Daily Loss Plot")
+        
+        plot_df = pd.DataFrame({
+            'Date': df_raw['date'],
+            'Daily Loss': losses, # Use positive value for plotting loss
+            'VaR Limit': var_series 
+        }).set_index('Date')
+        
+        # Add a column to identify breaches for visualization
+        plot_df['Breach'] = np.where(breaches == 1, losses, np.nan)
+        
+        st.line_chart(plot_df[['Daily Loss', 'VaR Limit']], use_container_width=True)
+        
+        st.scatter_chart(plot_df[['Breach']], color='#ff4b4b', use_container_width=True)
+        st.caption("Red dots indicate days where the daily loss breached the VaR limit.")
+
+    # --- Tab 2: Regulatory Tests ---
+    with tab_tests:
+        st.markdown("### Backtesting Summary")
+        
+        # 1. Summary Metrics (in new styled cards)
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Observations (T)", results_summary['Total Observations (T)'])
+        col2.metric("Total Breaches (N)", results_summary['Total Breaches (N)'])
+        col3.metric("Expected Breaches (T*p)", results_summary['Expected Breaches (T*p)'])
+        col4.metric("Observed Breach Rate", results_summary['Observed %'])
+        col5.metric("Expected Breach Rate", results_summary['Expected %'])
+
+        st.divider()
+
+        # 2. Test Results Table
+        st.markdown(f"#### Regulatory Tests ($\\alpha={alpha_level}$)")
+        st.dataframe(test_results_df, use_container_width=True, hide_index=True)
+        
+        confidence_pct = int((1 - alpha_level) * 100)
+
+        # Conditional Warning/Pass Message
+        if 'FAIL' in test_results_df['Result'].values:
+            st.error(f"⚠️ **REGULATORY FAILURE:** At least one test failed the {confidence_pct}% confidence level. Review the VaR model.")
+        else:
+            st.success(f"✅ **REGULATORY PASS:** Both Kupiec POF and Christoffersen TUFF tests passed at the {confidence_pct}% confidence level.")
+
+    # --- Tab 3: Raw Data & Export ---
+    with tab_data:
+        st.markdown(f"### Full Backtest Data for {selected_index}")
+        st.caption(f"Displaying all {len(df_raw)} records for the selected index.")
+        
+        # 4. CSV Export
+        @st.cache_data
+        def convert_df(df):
+            return df.to_csv(index=False).encode('utf-8')
+
+        csv = convert_df(df_raw)
+
+        st.download_button(
+            label="Download Full Backtesting Data (CSV)",
+            data=csv,
+            file_name=f'VaR_Backtest_Data_{selected_index}.csv',
+            mime='text/csv',
+        )
+        
+        # Display the raw dataframe
+        st.dataframe(df_raw, use_container_width=True, height=500)
+
 
 if __name__ == "__main__":
-    # Ensure logs are visible for debugging
-    # st.set_log_level("DEBUG") 
     run_app()
+
