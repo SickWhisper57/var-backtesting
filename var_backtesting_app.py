@@ -25,8 +25,8 @@ def inject_custom_css():
         <style>
             /* --- Metric Cards --- */
             div[data-testid="stMetric"] {
-                background-color: #FAFAFA; /* Light gray background */
-                border: 1px solid #E0E0E0; /* Light border */
+                /* background-color: #FAFAFA;  <-- REMOVED THIS LINE to respect light/dark theme */
+                border: 1px solid #E0E0E0; /* Light border (will be overridden in dark mode) */
                 border-radius: 10px; /* Rounded corners */
                 padding: 15px 20px 15px 20px;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.05); /* Subtle shadow */
@@ -34,8 +34,8 @@ def inject_custom_css():
             
             /* Dark mode compatibility for Metric Cards */
             [data-theme="dark"] div[data-testid="stMetric"] {
-                background-color: #262730; /* Dark background */
-                border: 1px solid #444; 
+                /* background-color: #262730; <-- REMOVED THIS LINE */
+                border: 1px solid #444; /* Darker border for dark theme */
             }
 
             /* --- Success/Error Banners --- */
@@ -197,7 +197,7 @@ def populate_database():
         
         conn.commit()
         st.success(f"Database populated with {total_records} simulated records successfully.")
-        # Trigger a rerun to display the newly populated data
+        # Trigger a rerun to refresh the app state
         st.rerun() 
     except Exception as e:
         conn.rollback()
@@ -552,7 +552,7 @@ def run_app():
         )
         
         # Display the raw dataframe
-        st.dataframe(df_raw, use_container_width=True, height=500)
+        st.dataframe(df_raw, use_container_Vwidth=True, height=500)
 
 
 if __name__ == "__main__":
