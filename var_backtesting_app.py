@@ -552,7 +552,7 @@ def run_app():
         )
         
         # Display the raw dataframe
-        st.dataframe(df_raw, use_container_Vwidth=True, height=500)
+        st.dataframe(df_raw, use_container_width=True, height=500)
 
 
 if __name__ == "__main__":
