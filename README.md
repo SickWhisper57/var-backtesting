@@ -1,21 +1,17 @@
-This Streamlit-based application is a comprehensive Value at Risk (VaR) backtesting platform that combines the analytical power of Python with the robustness of a PostgreSQL database. It is designed to evaluate the performance and reliability of VaR models — a cornerstone of modern risk management — by comparing the model’s predicted losses with actual portfolio outcomes.
+This Streamlit-based application is a comprehensive Value at Risk (VaR) backtesting platform that combines the analytical power of Python with the reliability of a PostgreSQL database. It evaluates how accurately VaR models predict potential portfolio losses — a critical component in financial risk management.
 
-At its core, the application performs regulatory backtesting using two widely recognized statistical tests:
+The system performs regulatory backtesting using two industry-standard statistical tests: Kupiec’s Proportion of Failures (POF) test and Christoffersen’s Conditional Coverage test. These tests help determine whether a VaR model correctly estimates risk levels and whether observed exceptions occur randomly or in clusters during volatile market periods.
 
-Kupiec’s Proportion of Failures (POF) test, which assesses whether the frequency of VaR breaches aligns with the expected confidence level (e.g., 99% or 95%).
+The application works with both stored financial data and synthetic simulations, allowing users to explore model performance under real or hypothetical market conditions. All results — including daily Profit & Loss (PnL) figures, VaR estimates, and breach events — are stored in a PostgreSQL database for future analysis and reproducibility.
 
-Christoffersen’s Conditional Coverage test, which further examines whether these breaches occur randomly over time or cluster during periods of market stress.
+The interactive Streamlit dashboard provides a user-friendly interface to:
 
-The tool can operate on stored financial data or generate simulated market data, allowing users to test the robustness of VaR models under controlled or hypothetical scenarios. Through its PostgreSQL integration, all simulated or real data points — including daily Profit & Loss (PnL) values and their corresponding VaR estimates — are stored efficiently for future retrieval, analysis, or comparison across different models and timeframes.
+* Visualize PnL and VaR values across time.
 
-A key feature of the application is its interactive Streamlit dashboard, which provides a visual and intuitive interface for exploring backtesting results. Users can dynamically select indices, confidence levels, and test parameters, then view:
+* Identify and highlight days where actual losses exceeded the predicted VaR (exceptions).
 
-Time-series charts comparing daily PnL against VaR thresholds
+* View detailed results from the Kupiec and Christoffersen backtests, including p-values and pass/fail indicators.
 
-Highlighted exceptions (days when losses exceeded VaR)
+* Export datasets for deeper statistical analysis or reporting in external tools like Excel or Power BI.
 
-Detailed statistical outputs, including test statistics, p-values, and pass/fail flags
-
-Exportable datasets for extended analysis in Excel, Python, or BI tools
-
-In essence, this project bridges quantitative finance, data engineering, and data visualization — offering a practical, end-to-end solution for VaR model validation, educational demonstrations, or internal risk reporting. It replicates the kind of backtesting workflow used in banks, trading firms, and risk management teams, but in a streamlined and transparent way.
+Overall, this project integrates quantitative finance, data engineering, and data visualization to deliver a full-fledged VaR validation workflow. It mirrors the kind of backtesting and reporting frameworks used in investment banks, trading firms, and risk management teams, but in a simplified, transparent, and interactive format.
